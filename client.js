@@ -65,6 +65,20 @@ window.__ModuleLoader__.load({
       error: { margin: 0, color: C.error, fontSize: 12 },
     };
 
+    function stampText(lastCheck) {
+      if (!lastCheck) return '还没体检过';
+      const when = new Date(lastCheck.at);
+      const hhmm = Number.isNaN(when.getTime())
+        ? String(lastCheck.at)
+        : `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+      const bits = [`最近体检 ${hhmm}`];
+      if (lastCheck.pending) bits.push(`待贴 ${lastCheck.pending}`);
+      if (lastCheck.bad) bits.push(`异常 ${lastCheck.bad}`);
+      if (Array.isArray(lastCheck.missing) && lastCheck.missing.length) bits.push(`没找到 ${lastCheck.missing.join('、')}`);
+      if (!lastCheck.pending && !lastCheck.bad) bits.push('全部正常');
+      return bits.join(' · ');
+    }
+
     function Item({ item }) {
       const kind = item.status === 'pending' ? 'warn' : 'error';
       return h('div', { style: S.row },
@@ -150,6 +164,9 @@ window.__ModuleLoader__.load({
         h('div', null,
           h('h2', { style: S.title }, '补丁管家'),
           h('p', { style: S.sub }, '给 SurfCore / 刷B站 这类「独立进程型」程序打锚点补丁。默认只体检；点「应用补丁」才会改文件（改前自动备份，可回滚）。')),
+        h('div', { style: S.row },
+          h('button', { type: 'button', style: S.button(false, busy), disabled: busy, onClick: () => onAction('check', 'all') }, '全部体检'),
+          h('span', { style: S.sub }, stampText(state.lastCheck))),
         message ? h('p', { style: S.error }, message) : null,
         notice ? h('p', { style: S.sub }, notice) : null,
         (state.targets ?? []).map((target) => h(Target, { key: target.id, target, onAction, busy })),

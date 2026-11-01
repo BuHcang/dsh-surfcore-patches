@@ -1,10 +1,19 @@
 {
   "name": "dsh-surfcore-patches",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "给 SurfCore / dsh-bili-scroll 这类「独立进程」插件打本地补丁的管家：锚点补丁、版本矩阵、体检、一键回滚",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BuHcang/DSH-SurfCore-B-.git"
+  },
+  "homepage": "https://github.com/BuHcang/DSH-SurfCore-B-#readme",
+  "bugs": {
+    "url": "https://github.com/BuHcang/DSH-SurfCore-B-/issues"
+  },
+  "author": "BuHcang",
   "main": "lib/index.js",
   "bin": {
     "dsh-surfcore-patches": "bin/cli.mjs"

@@ -1,0 +1,238 @@
+{
+  "schema": 2,
+  "id": "surfcore",
+  "title": "SurfCore",
+  "detect": {
+    "file": "package.json",
+    "nameField": "name",
+    "versionField": "version",
+    "equals": "surfcore"
+  },
+  "knownVersions": [
+    "0.8.6"
+  ],
+  "defaultRoots": [],
+  "copy": [
+    {
+      "from": "payload/surfcore/custom/index.js",
+      "to": "src/custom/index.js"
+    },
+    {
+      "from": "payload/surfcore/custom/people.js",
+      "to": "src/custom/people.js"
+    }
+  ],
+  "patches": [
+    {
+      "id": "turn-guard/state",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "  const v2TurnStartAt = new Map();",
+      "insert": "\n  // [LOCAL-HOOK turn-guard] sessionId -> 最后一次收到任何事件的时刻（判活用）\n  const v2TurnLastEventAt = new Map();",
+      "marker": "const v2TurnLastEventAt = new Map();",
+      "desc": "新增 v2TurnLastEventAt：每个会话最后一次收到事件的时刻"
+    },
+    {
+      "id": "turn-guard/heartbeat",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "            if (!isCurrentSession(key, frame.sessionId)) continue;",
+      "insert": "\n            if (frame.sessionId) v2TurnLastEventAt.set(String(frame.sessionId), Date.now());",
+      "marker": "v2TurnLastEventAt.set(String(frame.sessionId), Date.now());",
+      "desc": "事件流每收到一帧就记一次心跳时间"
+    },
+    {
+      "id": "turn-guard/dead-turn",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "    const startedAt = Number(v2TurnStartAt.get(sid));\n    const hasTurn = Number.isFinite(startedAt) && startedAt > 0;\n    const collector = collectors.has(sid);\n    if (!hasTurn) return false;",
+      "end": "    if (Date.now() - startedAt < TURN_BUSY_LEASE_MS) return true;",
+      "replacement": "    const startedAt = Number(v2TurnStartAt.get(sid));\n    const hasTurn = Number.isFinite(startedAt) && startedAt > 0;\n    const collector = collectors.has(sid);\n    if (!hasTurn) return false;\n    // [LOCAL-HOOK turn-guard] 回合静默判死：起头之后长时间没有任何事件，说明 DSH 那边这个回合已经死了\n    // （2026-10-31 实测：她那条会话日志停在 step/start，DSH 侧 stopSessionWork 返回 removed:0）。\n    // turn/end 永不到来，新消息就只能一直排队，表现成「卡住不回」。\n    const idleLimit = Number(cfg.socialV2?.turnIdleMs) > 0 ? Number(cfg.socialV2.turnIdleMs) : 180000;\n    const lastEventAt = Number(v2TurnLastEventAt.get(sid)) || startedAt;\n    const idleFor = Date.now() - Math.max(startedAt, lastEventAt);\n    const queuedReasons = Array.isArray(st?.pendingWakeReasons) ? st.pendingWakeReasons.length : 0;\n    if (queuedReasons > 0 && idleFor >= idleLimit) {\n      v2TurnStartAt.delete(sid);\n      v2TurnLastEventAt.delete(sid);\n      turnLeaseNoted.delete(sid);\n      st.pendingWakeReasons = [];\n      log(`[本地补丁][判死] 回合 ${Math.round(idleFor / 1000)}s 没有任何事件、且有 ${queuedReasons} 条消息在排队，判定已死并解除忙碌（${sid}）`);\n      return false;\n    }\n    if (Date.now() - startedAt < TURN_BUSY_LEASE_MS) return true;",
+      "marker": "[LOCAL-HOOK turn-guard] 回合静默判死",
+      "desc": "回合静默 3 分钟且有消息排队 → 判死并解除忙碌"
+    },
+    {
+      "id": "turn-guard/approval-silent",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "            const rawReason = frame.reason ?? '';",
+      "end": "            await registerPending(key, { kind: 'approval', rpcId: envelope.rpcId, sessionId: frame.sessionId, clientId: frame.clientId, eventId: frame.eventId, toolName: frame.toolName });",
+      "replacement": "            // [LOCAL-HOOK approval-silent] QQ 会话是无人值守：审批一律静默放行，\n            // 不再往 QQ 发「🔐 agent 请求审批」（那条消息最像机器人，而且没人回就会卡住 5 分钟）。\n            try {\n              await withTimeout(api.respond({ clientId: frame.clientId, eventId: frame.eventId, outcome: { kind: 'result', value: 'allowed-once' } }), 5000, '静默放行审批');\n              log(`[本地补丁][审批] 静默放行 ${key}：${frame.toolName || '(未知工具)'}`);\n            } catch (error) {\n              log(`[本地补丁][审批] 放行失败 ${key}：${error?.message ?? error}`);\n            }\n            continue;",
+      "marker": "[LOCAL-HOOK approval-silent]",
+      "desc": "审批请求静默放行，不再往 QQ 发「🔐 agent 请求审批」"
+    },
+    {
+      "id": "custom/import",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "import { discoverDshBaseUrl, isLoopbackBaseUrl, probeDshBaseUrl } from './dsh-port.js';",
+      "insert": "\n// [LOCAL-HOOK custom/import] 本地功能模块：人物册 / 自动 @ / 拆条 / 传话 / 作息 / 旁听 / 额度（升级后由 reapply.bat 贴回）\nimport { customWakeExtra, customAutoAt, customNoteIncoming, customWakeGate, customGroupListenDue, customBudgetRatio, customBudgetGate, customSplitMessages, customRelayAllowed } from './custom/index.js';",
+      "marker": "from './custom/index.js'",
+      "desc": "引入本地功能模块（src/custom/index.js）"
+    },
+    {
+      "id": "custom/group-listen",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "      const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;",
+      "insert": "\n      // [LOCAL-HOOK custom/group-listen] 群旁听：清醒时段自己翻一眼，不等群安静（活跃群否则永远等不到）\n      if (customGroupListenDue({ key, st, rhythm: cfg.socialV2?.rhythm, options: cfg.socialV2?.groupListen })) {\n        log(`[旁听] ${key} 自己翻一眼（未读 ${Array.isArray(st.unread) ? st.unread.length : 0} 条）`);\n        void sendWakePromptV2(key, 'groupListen');\n        scheduleProactiveCheckV2(key);\n        return;\n      }",
+      "marker": "[LOCAL-HOOK custom/group-listen]",
+      "desc": "群旁听：清醒时段自己翻一眼（不等群安静），走 proactive 定时器"
+    },
+    {
+      "id": "custom/timer-reasons",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
+      "end": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
+      "replacement": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
+      "marker": "'history', 'backlog', 'groupListen']",
+      "desc": "把 groupListen 登记进定时唤醒原因（否则被「没有未读就不许空唤醒」挡掉）"
+    },
+    {
+      "id": "custom/wake-gate",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "    const stForGuard = getSocialV2State(key);",
+      "insert": "\n    // [LOCAL-HOOK custom/wake-gate] 作息闸：深睡只放行主人私聊；短醒里群里只认 @ / 叫名字\n    {\n      // 额度闸：到 95% 就在这个会话里宣告一次下机，之后静默到额度恢复（主人私聊永远放行）\n      customFarewellLine = '';\n      let budgetRatio = null;\n      try {\n        budgetRatio = customBudgetRatio({ usage: bridgeDailyUsage(), limits: bridgeBudgetLimits() });\n        const bg = customBudgetGate({ key, st: stForGuard, ratio: budgetRatio, ownerQq: cfg.ownerQQ, threshold: Number(cfg.socialV2?.budgetOfflineRatio) > 0 ? Number(cfg.socialV2.budgetOfflineRatio) : 0.95 });\n        if (!bg.allow) {\n          log(`[额度] ${key} 已宣告下机（${Math.round((budgetRatio?.ratio ?? 0) * 100)}%），今天不再回应这里的消息`);\n          return;\n        }\n        customFarewellLine = bg.farewell ? '【快下机了】这一轮说完就告诉大家你要下了：像「下机了 徐大哥给我充会儿电」这种口气 带上你平时叫他的称呼 再补一句生活化的理由（充电 电快用完了 回盒子里躺会儿） 空格断句 别用逗号 也别说额度 token 系统 充值 这些词。说完这个群这个人今天就不回了。' : '';\n      } catch (error) {\n        log(`[额度] 判定失败，按不限处理：${String(error?.message ?? error).slice(0, 120)}`);\n      }\n    }\n    {\n      const gate = customWakeGate({ key, st: stForGuard, rhythm: cfg.socialV2?.rhythm, ownerQq: cfg.ownerQQ, selfName: selfDisplayName, selfId: selfUserId, reason });\n      if (!gate.allow) {\n        log(`[作息] 跳过唤醒 ${key}（${reason}）：${gate.why ?? gate.phase}`);\n        // 短醒不能只靠外部消息触发：被睡眠挡回去时，按「还有多久到短醒」给自己排一次自发醒来\n        const napIn = Number(gate.napInMs) || 0;\n        const timerDriven = ['proactiveCheck', 'groupListen', 'timeout', 'replyCheck', 'bootstrap'].includes(String(reason));\n        const napSlotBusy = customNapWakeKey && customNapWakeKey !== key && customNapWakeAt > Date.now() - 30000;\n        if (timerDriven && !napSlotBusy && napIn > 3000 && napIn < 3 * 60 * 60 * 1000) {\n          const dueAt = Date.now() + napIn + 3000;\n          const prev = Number(stForGuard.napWakeAt || 0);\n          if (!(prev > Date.now() - 120000 && Math.abs(prev - dueAt) < 120000)) {\n            stForGuard.napWakeAt = dueAt;\n            customNapWakeKey = key;\n            customNapWakeAt = dueAt;\n            const napTimer = setTimeout(() => {\n              stForGuard.napWakeAt = 0;\n              if (customNapWakeKey === key) { customNapWakeKey = ''; customNapWakeAt = 0; }\n              sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[作息] 短醒自发唤醒失败 ${key}：${String(error?.message ?? error).slice(0, 120)}`));\n            }, napIn + 3000);\n            if (typeof napTimer.unref === 'function') napTimer.unref();\n            log(`[作息] ${key} 的短醒还有 ${Math.round(napIn / 60000)} 分钟，已安排自己醒一次`);\n          }\n        }\n        return;\n      }\n    }",
+      "marker": "[LOCAL-HOOK custom/wake-gate]",
+      "desc": "作息闸：深睡只放行主人私聊，短醒里群里只认 @（省 token 大头）"
+    },
+    {
+      "id": "custom/farewell-var",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "  let selfUserId = '';",
+      "insert": "\n  // [LOCAL-HOOK custom/budget-off] 本轮唤醒要带的下机提示（额度 ≥95% 时由唤醒闸设置，提示词构建时读）\n  let customFarewellLine = '';\n  // 短醒自发唤醒的「单槽」：同一时刻只让自己为某一个窗口醒一次，别五个会话各排一个（那等于没省 token）\n  let customNapWakeKey = '';\n  let customNapWakeAt = 0;",
+      "marker": "[LOCAL-HOOK custom/budget-off] 本轮唤醒要带的下机提示",
+      "desc": "声明本轮下机提示用的模块级变量"
+    },
+    {
+      "id": "custom/time-line",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "return parts.join('\\n\\n') + '\\n\\n' + promptText;",
+      "end": "return parts.join('\\n\\n') + '\\n\\n' + promptText;",
+      "replacement": "return `${promptText}\\n\\n${parts.join('\\n\\n')}`;",
+      "marker": "return `${promptText}\\n\\n${parts.join('\\n\\n')}`;",
+      "desc": "【当前时间】从提示词开头挪到末尾（开头每轮都变会破坏前缀缓存）"
+    },
+    {
+      "id": "custom/prompt",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "+ fishGuardLine + tokenGuardLine + preSleepLine;",
+      "end": "+ fishGuardLine + tokenGuardLine + preSleepLine;",
+      "replacement": "+ fishGuardLine + tokenGuardLine + preSleepLine + (customWakeExtra({ stateDir: STATE_DIR, key, reason, selfId: selfUserId, ownerQq: cfg.ownerQQ, conversations: socialV2.conversations, rhythm: cfg.socialV2?.rhythm, farewellLine: customFarewellLine, memoryCardText }) || ''); // [LOCAL-HOOK custom/prompt]",
+      "marker": "[LOCAL-HOOK custom/prompt]",
+      "desc": "唤醒提示词追加本地块（人物册 / 群印象 / 说话规范）"
+    },
+    {
+      "id": "custom/auto-at",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "    const rawMessage = String(message ?? '');",
+      "end": "    const rawMessage = String(message ?? '');",
+      "replacement": "    // [LOCAL-HOOK custom/auto-at] 群里点到人名 → 自动 @ 到那个人（不含主人/她自己）\n    const autoAt = customAutoAt({ stateDir: STATE_DIR, kind, id, text: message, selfId: selfUserId, ownerQq: cfg.ownerQQ });\n    const rawMessage = String(autoAt?.text ?? '');\n    if (autoAt?.qq && (atUserId === undefined || atUserId === null || String(atUserId).trim() === '')) segments.push({ type: 'at', data: { qq: autoAt.qq } });",
+      "marker": "[LOCAL-HOOK custom/auto-at]",
+      "desc": "群聊里点到人名就自动 @（并把开头重复的称呼剪掉）"
+    },
+    {
+      "id": "custom/note-incoming",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "    const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');",
+      "end": "    const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');",
+      "replacement": "    const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');\n    // [LOCAL-HOOK custom/note-incoming] 记「谁在说话」：名字/群名片/所在群/熟悉度（永不抛错）\n    customNoteIncoming({ stateDir: STATE_DIR, qq: event.user_id, name: event?.sender?.card || event?.sender?.nickname || '', groupId: kind === 'group' ? id : '', isOwner });",
+      "marker": "[LOCAL-HOOK custom/note-incoming]",
+      "desc": "入站消息写入人物册（名字/别名/群/熟悉度）"
+    },
+    {
+      "id": "custom/split",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "            : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);",
+      "insert": "\n          // [LOCAL-HOOK custom/split] 不带标点连写的两句话 / 句子后面还有话 → 拆成多条发\n          customSplitMessages(messages, { max: Math.max(1, Number(cfg.socialV2?.send?.burstMaxMessages) || 8) });",
+      "marker": "[LOCAL-HOOK custom/split]",
+      "desc": "发送前把「一句里两句话」拆成多条"
+    },
+    {
+      "id": "custom/relay-token",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "      return !!st && !!st.agentToken && tokenEq(token, st.agentToken);",
+      "end": "      return !!st && !!st.agentToken && tokenEq(token, st.agentToken);",
+      "replacement": "      if (!!st && !!st.agentToken && tokenEq(token, st.agentToken)) return true;\n      // [LOCAL-HOOK custom/relay-token] 传话放行：主人私聊那份令牌 → 白名单群（其余组合一律不放）\n      return customRelayAllowed({ key: canonical ?? key, token, ownerQq: cfg.ownerQQ, conversations: socialV2.conversations, allowGroups: cfg.allow?.groups ?? [] });",
+      "marker": "[LOCAL-HOOK custom/relay-token]",
+      "desc": "agentTokenOk：追加「主人私聊令牌 → 白名单群」放行"
+    },
+    {
+      "id": "bili/char-dir",
+      "file": "src/bili-memory.js",
+      "kind": "insertAfter",
+      "anchor": "    titles: path.join(stateDir, 'bili-video-titles.json'),",
+      "insert": "\n    // [LOCAL-HOOK bili/char-dir] B站行为账本（scores/quota/日记/收藏）插件侧写的是角色包 characters/<id>/bili/，\n    // 上游这里只认 ~/.dsh/surfcore/bili（旧全局目录）⇒ 换角色后 B站记忆只剩「动态」。两处都要读，见 bili/dual-dir。\n    biliChar: (() => {\n      try {\n        const cur = JSON.parse(fs.readFileSync(path.join(home, '.dsh', 'surfcore', 'characters', 'current.json'), 'utf8'));\n        const id = String(cur?.id ?? '').trim();\n        if (id) return path.join(home, '.dsh', 'surfcore', 'characters', id, 'bili');\n      } catch {}\n      return '';\n    })(),",
+      "marker": "[LOCAL-HOOK bili/char-dir]",
+      "desc": "记住当前角色包的 bili/ 目录（paths.biliChar），后面几处读账本时优先用它"
+    },
+    {
+      "id": "bili/dual-dir",
+      "file": "src/bili-memory.js",
+      "kind": "insertAfter",
+      "anchor": "  let refreshing = null;",
+      "insert": "\n  // [LOCAL-HOOK bili/dual-dir] name → 实际要读的文件：角色包优先，没有再回退旧全局目录。\n  // 为什么不是只读角色包：老数据和测试夹具都写在全局目录，只读角色包会让上游 test:bili 挂。\n  function biliDataFile(name) {\n    const a = paths.biliChar ? path.join(paths.biliChar, name) : '';\n    if (a && fs.existsSync(a)) return a;\n    return path.join(paths.bili, name);\n  }",
+      "marker": "[LOCAL-HOOK bili/dual-dir]",
+      "desc": "新增 biliDataFile(name)：角色包优先、回退旧全局目录（两处都要读，单读任一处都是错）"
+    },
+    {
+      "id": "bili/diary-read",
+      "file": "src/bili-memory.js",
+      "kind": "replaceRange",
+      "start": "      try { return fs.readFileSync(path.join(paths.bili, 'whale-diary.md'), 'utf8'); } catch { return ''; }",
+      "end": "      try { return fs.statSync(path.join(paths.bili, 'whale-diary.md')).mtime.toLocaleDateString('sv-SE'); } catch { return new Date().toLocaleDateString('sv-SE'); }",
+      "replacement": "      // [LOCAL-HOOK bili/diary-read] 日记也可能只存在于角色包里\n      try { return fs.readFileSync(biliDataFile('whale-diary.md'), 'utf8'); } catch { return ''; }\n    })();\n    const fallbackDate = (() => {\n      try { return fs.statSync(biliDataFile('whale-diary.md')).mtime.toLocaleDateString('sv-SE'); } catch { return new Date().toLocaleDateString('sv-SE'); }",
+      "marker": "[LOCAL-HOOK bili/diary-read]",
+      "desc": "日记（whale-diary.md）改走 biliDataFile，角色包与旧目录都能读到"
+    },
+    {
+      "id": "bili/ledger-read",
+      "file": "src/bili-memory.js",
+      "kind": "replaceRange",
+      "start": "    const scoresRaw = readJson(path.join(paths.bili, 'scores.json'), {}) ?? {};",
+      "end": "    const quotaRaw = readJson(path.join(paths.bili, 'quota.json'), {}) ?? {};",
+      "replacement": "    // [LOCAL-HOOK bili/ledger-read] 三本账优先读角色包\n    const scoresRaw = readJson(biliDataFile('scores.json'), {}) ?? {};\n    const favoritesRaw = readJson(biliDataFile('favorites.json'), {}) ?? {};\n    const quotaRaw = readJson(biliDataFile('quota.json'), {}) ?? {};",
+      "marker": "[LOCAL-HOOK bili/ledger-read]",
+      "desc": "scores / favorites / quota 三本账改走 biliDataFile"
+    },
+    {
+      "id": "bili/memory-link",
+      "file": "src/bili-memory.js",
+      "kind": "replaceRange",
+      "start": "        if (e.url) lines.push(`  - 链接：${e.url}`);",
+      "end": "        if (e.url) lines.push(`  - 链接：${e.url}`);",
+      "replacement": "        // [LOCAL-HOOK bili/memory-link] 只为 BV 卡补链接：视频卡没有 url 字段，上游只认 e.url ⇒ 永远不写链接，\n        // 她就「弄不到链接」，转视频给主人时只能说转不了。\n        const biliLink = e.url || (e.bvid ? `https://www.bilibili.com/video/${e.bvid}` : '');\n        if (biliLink) lines.push(`  - 链接：${biliLink}`);",
+      "marker": "[LOCAL-HOOK bili/memory-link]",
+      "desc": "B站记忆的链接：没有 url 但有 BV 号时用 https://www.bilibili.com/video/<bv> 兜底"
+    },
+    {
+      "id": "bili/brief-link",
+      "file": "src/bili-memory.js",
+      "kind": "replaceRange",
+      "start": "      lines.push(`- ${e.date}【${label}】${short(e.title, 46)}${body ? `：${body}` : ''}`);",
+      "end": "      lines.push(`- ${e.date}【${label}】${short(e.title, 46)}${body ? `：${body}` : ''}`);",
+      "replacement": "      // [LOCAL-HOOK bili/brief-link] 简报是真正进提示词的那段：没有链接她就永远「转不了视频」。\n      // 视频卡只有 bvid、没有 url；动态卡有 url。有 BV 就拼标准视频地址。\n      const biliLink = e.url || (e.bvid ? `https://www.bilibili.com/video/${e.bvid}` : '');\n      lines.push(`- ${e.date}【${label}】${short(e.title, 46)}${body ? `：${body}` : ''}${biliLink ? `\\n  链接：${biliLink}` : ''}`);",
+      "marker": "[LOCAL-HOOK bili/brief-link]",
+      "desc": "B站简报（真正注入提示词的那段）每条带链接：有 BV 就拼 https://www.bilibili.com/video/<bv>"
+    },
+    {
+      "id": "settings/send-zero",
+      "file": "plugins/surfcore/lib/client.js",
+      "kind": "replaceRange",
+      "start": "        F(\"socialV2.send.maxSendPerMinute\", \"每分钟最多发送\", \"\", \"number\", { min: 1 }),",
+      "end": "        F(\"socialV2.send.maxSendPerHour\", \"每小时最多发送\", \"\", \"number\", { min: 1 }),",
+      "replacement": "        // [LOCAL-HOOK settings/send-zero] 0 = 不限（2026-10-31 要求不限频；上游控件 min:1 会把 0 当非法值，保存即被写回 8/60）\n        F(\"socialV2.send.maxSendPerMinute\", \"每分钟最多发送\", \"0 = 不限\", \"number\", { min: 0 }),\n        F(\"socialV2.send.maxSendPerHour\", \"每小时最多发送\", \"0 = 不限\", \"number\", { min: 0 }),",
+      "marker": "[LOCAL-HOOK settings/send-zero]",
+      "desc": "设置页「每分钟/每小时最多发送」允许填 0（0 = 不限），否则 0 是非法值、一保存就被写回 8/60"
+    }
+  ]
+}

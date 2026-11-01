@@ -1,0 +1,33 @@
+{
+  "schema": 2,
+  "id": "dsh-bili-scroll",
+  "title": "刷B站（dsh-bili-scroll）",
+  "detect": {
+    "file": "package.json",
+    "nameField": "name",
+    "versionField": "version",
+    "equals": "dsh-bili-scroll"
+  },
+  "knownVersions": [
+    "2.3.1"
+  ],
+  "defaultRoots": [],
+  "copy": [
+    {
+      "from": "payload/dsh-bili-scroll/bili-duty.cordis.patch.yml",
+      "to": "profile-template/bili-duty/cordis.patch.yml"
+    }
+  ],
+  "patches": [
+    {
+      "id": "bili/verify-pages",
+      "file": "lib/verify.mjs",
+      "kind": "replaceRange",
+      "start": "    const PAGES = 6",
+      "end": "    const PAGES = 6",
+      "replacement": "    // [LOCAL-HOOK bili/verify-pages] 复核只翻最新 20 条容易误报「没发出去」；翻 6 页 = 最近 120 条\n    const PAGES = 6",
+      "marker": "[LOCAL-HOOK bili/verify-pages]",
+      "desc": "评论复核从「最新 20 条」放宽到 6 页 120 条，减少误报"
+    }
+  ]
+}

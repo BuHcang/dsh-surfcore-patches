@@ -1,0 +1,7 @@
+- insert:
+    - id: surfcore-patches
+      name: dsh-surfcore-patches
+      config:
+        # 只体检、不自动贴：默认安全。要真贴，在设置页点「应用」。
+        autoCheckOnStart: true
+        autoApply: false

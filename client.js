@@ -44,6 +44,17 @@ window.__ModuleLoader__.load({
       title: { margin: 0, fontSize: 15, fontWeight: 600 },
       sub: { margin: 0, color: C.muted, fontSize: 12 },
       mono: { fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 11.5, wordBreak: 'break-all', color: C.muted },
+      input: {
+        flex: '1 1 320px',
+        minWidth: 240,
+        padding: '6px 9px',
+        borderRadius: 8,
+        border: `1px solid ${C.border}`,
+        background: 'transparent',
+        color: C.text,
+        fontSize: 12.5,
+        fontFamily: 'ui-monospace, Consolas, monospace',
+      },
       badge: (kind) => ({
         fontSize: 11,
         padding: '1px 7px',
@@ -116,10 +127,13 @@ window.__ModuleLoader__.load({
       const [message, setMessage] = useState('');
       const [notice, setNotice] = useState('');
 
+      const [roots, setRoots] = useState(null);
+
       const load = useCallback(async () => {
         try {
           const data = await api('state');
           setState(data);
+          setRoots((prev) => prev ?? { surfcore: data.roots?.surfcore ?? '', 'dsh-bili-scroll': data.roots?.['dsh-bili-scroll'] ?? '' });
           setMessage('');
         } catch (error) {
           setMessage(String(error.message ?? error));
@@ -130,10 +144,36 @@ window.__ModuleLoader__.load({
         load();
       }, [load]);
 
+      const [lastAction, setLastAction] = useState(null);
+
+      const onSaveRoots = useCallback(async () => {
+        if (!roots) return;
+        setBusy(true);
+        setMessage('');
+        setNotice('');
+        setLastAction({ action: 'roots', target: 'all' });
+        try {
+          const data = await api('roots', {
+            surfcore: String(roots.surfcore ?? '').trim(),
+            'dsh-bili-scroll': String(roots['dsh-bili-scroll'] ?? '').trim(),
+          });
+          setState((prev) => ({ ...prev, roots: data.roots, targets: data.targets, lastCheck: data.lastCheck }));
+          const missing = (data.targets ?? []).filter((t) => !t.installed);
+          setNotice(missing.length
+            ? `已保存。有 ${missing.length} 个目录还没认出来：${missing.map((t) => t.title).join('、')}`
+            : '已保存，两个目标都找到了。');
+        } catch (error) {
+          setMessage(String(error.message ?? error));
+        } finally {
+          setBusy(false);
+        }
+      }, [roots]);
+
       const onAction = useCallback(async (action, target) => {
         setBusy(true);
         setMessage('');
         setNotice('');
+        setLastAction({ action, target });
         try {
           const data = await api(action, { target });
           const word = action === 'apply' ? '应用' : action === 'revert' ? '回滚' : '体检';
@@ -167,8 +207,46 @@ window.__ModuleLoader__.load({
         h('div', { style: S.row },
           h('button', { type: 'button', style: S.button(false, busy), disabled: busy, onClick: () => onAction('check', 'all') }, '全部体检'),
           h('span', { style: S.sub }, stampText(state.lastCheck))),
-        message ? h('p', { style: S.error }, message) : null,
+        message ? h('div', { style: S.row },
+          h('span', { style: S.error }, message),
+          lastAction ? h('button', {
+            type: 'button',
+            style: S.button(false, busy),
+            disabled: busy,
+            onClick: () => onAction(lastAction.action, lastAction.target),
+          }, '重试') : null) : null,
         notice ? h('p', { style: S.sub }, notice) : null,
+        roots ? h('div', { style: S.card },
+          h('h3', { style: S.title }, '安装位置'),
+          h('p', { style: S.sub }, '填这两个程序的目录。留空 = 用环境变量 SURFCORE_ROOT / BILI_SCROLL_ROOT，再没有就用 ~/.dsh/surfcore-patches/roots.json 和默认安装目录。'),
+          h('div', { style: S.row },
+            h('span', { style: S.sub }, 'SurfCore'),
+            h('input', {
+              type: 'text',
+              style: S.input,
+              spellCheck: false,
+              placeholder: 'D:\\DSH-Work\\surfcore',
+              value: roots.surfcore,
+              onChange: (e) => setRoots({ ...roots, surfcore: e.target.value }),
+            })),
+          h('div', { style: S.row },
+            h('span', { style: S.sub }, '刷B站'),
+            h('input', {
+              type: 'text',
+              style: S.input,
+              spellCheck: false,
+              placeholder: 'C:\\Users\\<你>\\.dsh\\profiles\\desktop\\node_modules\\dsh-bili-scroll',
+              value: roots['dsh-bili-scroll'],
+              onChange: (e) => setRoots({ ...roots, 'dsh-bili-scroll': e.target.value }),
+            })),
+          h('div', { style: S.row },
+            h('button', {
+              type: 'button',
+              style: S.button(true, busy),
+              disabled: busy,
+              onClick: () => onSaveRoots(),
+            }, '保存并体检'),
+            h('span', { style: S.sub }, '保存后立刻重新扫一遍，失败会在这里红字说明原因'))) : null,
         (state.targets ?? []).map((target) => h(Target, { key: target.id, target, onAction, busy })),
         h('p', { style: S.sub }, `状态目录：${state.stateDir}`),
         h('p', { style: S.sub }, '命令行等价物：node bin/cli.mjs check|apply|revert|doctor --target <id> --root <目录>'));

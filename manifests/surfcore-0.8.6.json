@@ -20,6 +20,10 @@
     {
       "from": "payload/surfcore/custom/people.js",
       "to": "src/custom/people.js"
+    },
+    {
+      "from": "payload/surfcore/custom/outreach.js",
+      "to": "src/custom/outreach.js"
     }
   ],
   "patches": [
@@ -233,6 +237,43 @@
       "replacement": "        // [LOCAL-HOOK settings/send-zero] 0 = 不限（2026-10-31 要求不限频；上游控件 min:1 会把 0 当非法值，保存即被写回 8/60）\n        F(\"socialV2.send.maxSendPerMinute\", \"每分钟最多发送\", \"0 = 不限\", \"number\", { min: 0 }),\n        F(\"socialV2.send.maxSendPerHour\", \"每小时最多发送\", \"0 = 不限\", \"number\", { min: 0 }),",
       "marker": "[LOCAL-HOOK settings/send-zero]",
       "desc": "设置页「每分钟/每小时最多发送」允许填 0（0 = 不限），否则 0 是非法值、一保存就被写回 8/60"
+    },
+    {
+      "id": "custom/outreach-import",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "import { customRelayAllowed } from './custom/index.js';",
+      "insert": "\n// [LOCAL-HOOK custom/outreach-import] 主动找人（src/custom/outreach.js）\nimport { customOutreachGate, customPickOutreachTarget, customOutreachRecord, customMarkNotFriend } from './custom/index.js';",
+      "marker": "[LOCAL-HOOK custom/outreach-import]",
+      "desc": "引入主动找人所需函数（经 custom/index.js 再导出）"
+    },
+    {
+      "id": "custom/outreach-trigger",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "      const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;",
+      "insert": "\n      // [LOCAL-HOOK custom/outreach] 自己找人：约定到点 / 机会型（每天最多 2 次，主人指使不算）\n      try {\n        const oGate = customOutreachGate({\n          stateDir: STATE_DIR,\n          ratio: customBudgetRatio({ usage: bridgeDailyUsage(), limits: bridgeBudgetLimits() }),\n          options: cfg.socialV2?.outreach\n        });\n        if (oGate.ok) {\n          const oTarget = customPickOutreachTarget({ stateDir: STATE_DIR, conversations: socialV2.conversations, ownerQq: cfg.ownerQQ, options: cfg.socialV2?.outreach });\n          const oKey = oTarget ? `private:${oTarget.qq}` : '';\n          const oSt = oKey ? socialV2.conversations.get(oKey) : null;\n          if (oTarget && oSt && !isConversationBusyV2(oKey, oSt)) {\n            customOutreachRecord({ stateDir: STATE_DIR, qq: oTarget.qq });\n            log(`[找人] 自己去找 ${oTarget.name || oTarget.qq}（${oTarget.why}${oTarget.about ? `：${oTarget.about}` : ''}）`);\n            void sendWakePromptV2(oKey, 'outreach').catch((error) => log(`[找人] 唤醒失败 ${oKey}:`, error?.message ?? error));\n          }\n        }\n      } catch (error) { log('[找人] 判断失败:', error?.message ?? error); }",
+      "marker": "[LOCAL-HOOK custom/outreach]",
+      "desc": "proactive 定时器里判断「现在该不该自己去找人」，到点就唤醒那个人私聊"
+    },
+    {
+      "id": "custom/outreach-timer",
+      "file": "src/bridge.js",
+      "kind": "replaceRange",
+      "start": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
+      "end": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
+      "replacement": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen', 'outreach']); // [LOCAL-HOOK custom/outreach-timer]",
+      "marker": "[LOCAL-HOOK custom/outreach-timer]",
+      "desc": "outreach 也算定时唤醒来源（短醒/睡眠判定用）"
+    },
+    {
+      "id": "custom/not-friend",
+      "file": "src/bridge.js",
+      "kind": "insertAfter",
+      "anchor": "    if (/白名单|不在允许|审计|会话令牌|replyToMessageId|atUserId/.test(String(error?.message ?? error))) return;",
+      "insert": "\n    // [LOCAL-HOOK custom/not-friend] 私聊发不出去通常就是不是好友：记下来，以后不再主动找他、也不去群里喊\n    try {\n      const em = String(error?.message ?? error ?? '');\n      if (String(key).startsWith('private:') && /好友|friend|not\\s*friend|1004/i.test(em)) {\n        customMarkNotFriend({ stateDir: STATE_DIR, qq: String(key).slice('private:'.length) });\n        log(`[找人] ${key} 私聊发不出去 记成不是好友`);\n      }\n    } catch {}",
+      "marker": "[LOCAL-HOOK custom/not-friend]",
+      "desc": "私聊发送失败疑似「不是好友」时记进 outreach.json，避免反复试"
     }
   ]
 }

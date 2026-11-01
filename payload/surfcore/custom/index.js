@@ -6,6 +6,16 @@
  * 升级后用 `_custom\surfcore-patches\reapply.bat` 十分钟贴回来。
  */
 import { loadPeople, noteIncoming, rosterOf, impressionsOf, findMentioned } from './people.js';
+import { customOutreachLine, customIsNotFriend } from './outreach.js';
+export {
+  customOutreachGate,
+  customPickOutreachTarget,
+  customOutreachRecord,
+  customMarkNotFriend,
+  customGuessFollowup,
+  customFollowupAdd,
+  customOutreachLine
+} from './outreach.js';
 
 const FAMILY_LABEL = (score) => (score >= 90 ? '很熟' : score >= 60 ? '熟' : score >= 30 ? '有印象' : '刚认识');
 
@@ -28,7 +38,7 @@ export function customNoteIncoming({ stateDir, qq, name, groupId, isOwner }) {
  *  - 群聊：这个群里都有谁 + 对她的印象
  *  - 统一：说话规范（一条一句、不带逗号连句、情绪别压平）
  */
-export function customWakeExtra({ stateDir, key, st, selfId, ownerQq, conversations, rhythm, farewellLine, memoryCardText } = {}) {
+export function customWakeExtra({ stateDir, key, st, selfId, ownerQq, conversations, rhythm, farewellLine, memoryCardText, reason } = {}) {
   const lines = [];
   if (farewellLine) lines.push(`${farewellLine}\n`);
   try {
@@ -74,6 +84,10 @@ export function customWakeExtra({ stateDir, key, st, selfId, ownerQq, conversati
     // 跨窗口：她刚在别的会话里说过/看到过什么（只给摘要，不给原话；别人的私聊不互相串）
     const cross = crossWindowRows({ key, conversations, windowMs: rhythm?.crossWindowMs, ownerQq, memoryCardText });
     if (cross.length) lines.push(`【你刚在别处】\n${cross.join('\n')}\n`);
+
+    // 自己找人：这次唤醒就是她想找对方（一天最多两次，见 outreach.js）
+    const outreach = customOutreachLine({ stateDir, key, reason });
+    if (outreach) lines.push(outreach);
 
     lines.push('【怎么说】一条一句 不出现逗号顿号 每条 8 到 18 字 默认一条 情绪起来最多三条。群里叫到谁就写出他的名字 系统会自动 @ 到人 不用写 QQ 号。\n');
   } catch { return lines.length ? `${lines.join('\n')}\n` : ''; }
@@ -134,16 +148,35 @@ export function customSplitMessages(messages, { max = 3 } = {}) {
  * 于是「你帮我去群里喊个人」这类传话永远 403，她还以为是自己不会用。
  * 只放行群、只放行白名单里的群、只认主人私聊那一份令牌（别人私聊的令牌无效）。
  */
-export function customRelayAllowed({ key, token, ownerQq, conversations, allowGroups } = {}) {
+export function customRelayAllowed({ key, token, ownerQq, conversations, allowGroups, stateDir } = {}) {
   try {
     const k = String(key || '');
-    if (!k.startsWith('group:')) return false;
-    const gid = k.slice('group:'.length);
-    const list = (Array.isArray(allowGroups) ? allowGroups : []).map((x) => String(x ?? '')).filter(Boolean);
-    if (!list.includes(gid)) return false;
     const ownerKey = `private:${String(ownerQq ?? '')}`;
-    const st = conversations?.get?.(ownerKey);
-    return Boolean(st?.agentToken) && String(token ?? '') === String(st.agentToken);
+    const ownerSt = conversations?.get?.(ownerKey);
+    const fromOwner = Boolean(ownerSt?.agentToken) && String(token ?? '') === String(ownerSt.agentToken);
+
+    if (k.startsWith('group:')) {
+      const gid = k.slice('group:'.length);
+      const list = (Array.isArray(allowGroups) ? allowGroups : []).map((x) => String(x ?? '')).filter(Boolean);
+      if (!list.includes(gid)) return false;
+      return fromOwner;
+    }
+
+    // 私聊：她自己去找人说话（用户 2026-11-01 m09458 批准的「主动找人」）。
+    // 只认「目标窗口已经存在」+「不是发不出去的那种」，其余一律不放。
+    if (k.startsWith('private:')) {
+      const qq = k.slice('private:'.length);
+      if (qq === String(ownerQq ?? '')) return fromOwner;
+      const target = conversations?.get?.(k);
+      if (!target) return false;
+      const anyValid = conversations && typeof conversations.values === 'function'
+        ? [...conversations.values()].some((s2) => s2?.agentToken && String(s2.agentToken) === String(token ?? ''))
+        : false;
+      if (!anyValid) return false;
+      if (stateDir && customIsNotFriend({ stateDir, qq })) return false;
+      return true;
+    }
+    return false;
   } catch { return false; }
 }
 

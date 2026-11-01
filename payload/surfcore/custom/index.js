@@ -81,8 +81,12 @@ export function customWakeExtra({ stateDir, key, st, selfId, ownerQq, conversati
       lines.push('【作息】这会儿本不该醒 是被直接叫起来的 只回这一件事 说完继续睡\n');
     }
 
-    // 跨窗口：她刚在别的会话里说过/看到过什么（只给摘要，不给原话；别人的私聊不互相串）
-    const cross = crossWindowRows({ key, conversations, windowMs: rhythm?.crossWindowMs, ownerQq, memoryCardText, ownerSeesOtherPrivate: rhythm?.crossContext?.ownerSeesOtherPrivate === true });
+    // 跨窗口：她刚在别的会话里说过/看到过什么（只给脱敏后的摘要，敏感信息整条丢）
+    const nameMap = {};
+    for (const p of Object.values(db.people || {})) {
+      if (p && p.qq && p.name) nameMap[String(p.qq)] = String(p.name);
+    }
+    const cross = crossWindowRows({ key, conversations, windowMs: rhythm?.crossWindowMs, ownerQq, memoryCardText, names: nameMap });
     if (cross.length) lines.push(`【你刚在别处】\n${cross.join('\n')}\n`);
 
     // 自己找人：这次唤醒就是她想找对方（一天最多两次，见 outreach.js）
@@ -358,15 +362,45 @@ export function customGroupListenDue({ key, st, rhythm, options } = {}) {
 const L2_DEFAULT_MS = 3 * 60 * 60 * 1000;
 
 /**
+ * 摘要级脱敏：跨窗口只给「能随口提一句」的那种内容。
+ *
+ * 口径（用户 2026-11-01 定）：摘要对所有窗口开放（群能看私聊摘要、私聊也能看群摘要），
+ * 但**摘要本身**必须把敏感信息滤掉——手机号、地址、账号、金额、健康、证件、密码这类
+ * 整条丢掉；链接、长数字、@ 一律抹掉。像「他喜欢紫色」「昨天吃了火锅」这种留着。
+ */
+const CROSS_DROP_PATTERNS = [
+  /密码|口令|验证码|密钥|api[\s_-]?key|token|私钥/i,
+  /身份证|护照|银行卡|信用卡|卡号|支付宝|微信支付|收款码|转账|汇款|付款码/,
+  /手机号|电话号码|座机|打给我|我电话|号码是|加我微信|qq\s*号/,
+  /地址|住哪|家住|门牌|小区|几号楼|公司名|单位是|上班的地方|学校是|班级|宿舍/,
+  /工资|薪水|月薪|年薪|收入|存款|余额|欠了|借了|还钱|花了\s*\d|价格是\s*\d/,
+  /病|医院|住院|手术|吃药|抑郁|焦虑症|体检|怀孕|分手|离婚/,
+  /生日|出生|年龄|几岁|身高|体重/,
+  /真实姓名|真名|全名|身份证号/,
+];
+
+function scrubCrossSummary(text) {
+  const t = String(text ?? '').replace(/\s+/gu, ' ').trim();
+  if (!t || t.length < 2) return '';
+  if (CROSS_DROP_PATTERNS.some((re) => re.test(t))) return '';
+  return t
+    .replace(/https?:\/\/\S+/gi, '（链接）')
+    .replace(/@\S+/g, '')
+    .replace(/(?<!\d)\d{5,}(?!\d)/g, '（号码）')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 26);
+}
+
+/**
  * 别的会话最近在聊什么（只给摘要，不给原话）。
  *
- * 隐私线（用户 2026-10-31 m07876 定的矩阵）：除了「我的私聊 → 别人私聊」是 L1，
- * 其余都是 L2。所以这里做三件事：
- *  1. 别人的私聊内容**只出现在那个人自己的私聊窗口里**，不进群、不进别人的窗口；
- *  2. 主人私聊的内容**只给主人**，不进群、不进别人的私聊；
- *  3. 群消息可以进任何窗口（本来就是公共信息）。
+ * 隐私线（用户 2026-11-01 放宽后）：**摘要对所有窗口开放** ——
+ *   群窗口能看到私聊摘要，私聊窗口能看到群摘要、也能看到别人的私聊摘要；
+ *   唯一的硬限制是摘要必须过 `scrubCrossSummary`（敏感信息整条丢），
+ *   以及「不把自己这个窗口的内容再说一遍」。
  */
-export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, ownerQq, memoryCardText = '', ownerSeesOtherPrivate = false } = {}) {
+export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, ownerQq, memoryCardText = '', names = null } = {}) {
   const rows = [];
   try {
     if (!conversations?.get) return rows;
@@ -380,20 +414,11 @@ export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, own
       return memory.includes(t.slice(0, Math.min(12, t.length)));
     };
     const self = String(key || '');
-    const selfIsPrivate = self.startsWith('private:');
-    const selfIsOwner = Boolean(ownerQq) && self === `private:${String(ownerQq)}`;
     let budget = 420; // 总字数上限：跨窗口只是「提醒她刚在别处说过什么」，不该抢正文的位置
 
     for (const [otherKey, other] of conversations) {
       if (!other || otherKey === self) continue;
       const isPrivate = String(otherKey).startsWith('private:');
-      // 隐私线（默认最严）：别人的私聊内容只出现在那个人自己的窗口里 —— 不进群、
-      // 不进别人的私聊，也**不进主人窗口**（主人要总览得自己去看「和 ZepaRr」那个会话）。
-      // 想放宽就把 socialV2.crossContext.ownerSeesOtherPrivate 设成 true。
-      if (isPrivate) {
-        if (!(selfIsPrivate && selfIsOwner && ownerSeesOtherPrivate === true)) continue;
-        if (Boolean(ownerQq) && otherKey === `private:${String(ownerQq)}`) continue;
-      }
 
       const recent = Array.isArray(other.recentMessages) ? other.recentMessages : [];
       const picks = [...recent]
@@ -402,12 +427,19 @@ export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, own
         .filter((m) => !inMemory(String(m?.text ?? m?.content ?? '')))
         .slice(0, 2);
       if (!picks.length) continue;
+      const otherQq = isPrivate ? String(otherKey).slice('private:'.length) : '';
+      const nameOf = (fallback) => {
+        const fromMap = names && typeof names === 'object' ? names[otherQq] : '';
+        return String(fromMap || fallback || otherQq).slice(0, 10);
+      };
       for (const m of picks) {
         const at = Number(m.at || m.time || 0);
         const hhmm = `${String(new Date(at).getHours()).padStart(2, '0')}:${String(new Date(at).getMinutes()).padStart(2, '0')}`;
-        const who = isPrivate ? `和 ${String(m.senderName ?? m.name ?? String(otherKey).replace('private:', '')).slice(0, 8)}` : `群 ${String(otherKey).slice(6)}`;
-        const text = String(m.text ?? m.content ?? '').replace(/\s+/gu, ' ').slice(0, 26);
-        if (!text) continue;
+        const who = isPrivate
+          ? `和 ${nameOf(m.senderName ?? m.name)}`
+          : `群 ${String(otherKey).slice(6)}`;
+        const text = scrubCrossSummary(m.text ?? m.content);
+        if (!text) continue; // 敏感内容整条丢掉，不留半句
         const line = `- ${hhmm} ${who}：${text}`;
         if (line.length > budget) continue;
         budget -= line.length;

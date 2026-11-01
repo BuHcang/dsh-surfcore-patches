@@ -1,6 +1,6 @@
 {
   "name": "dsh-surfcore-patches",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "description": "给 SurfCore / dsh-bili-scroll 这类「独立进程」插件打本地补丁的管家：锚点补丁、版本矩阵、体检、一键回滚",
@@ -30,8 +30,12 @@
     },
     "client": {
       "platform": "web",
-      "inject": ["slots"],
-      "external": ["react"]
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
     }
   },
   "files": [
@@ -46,7 +50,12 @@
     "README.md",
     "LICENSE"
   ],
-  "keywords": ["dsh", "dsh-plugin", "surfcore", "patcher"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "surfcore",
+    "patcher"
+  ],
   "engines": {
     "node": ">=22"
   }

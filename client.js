@@ -27,13 +27,14 @@ window.__ModuleLoader__.load({
     };
 
     const C = {
-      text: 'var(--dsw-alias-label-primary)',
-      muted: 'var(--dsw-alias-label-secondary)',
-      border: 'var(--dsw-alias-border-l1)',
-      layer: 'var(--dsw-alias-bg-layer-1)',
-      brand: 'var(--dsw-alias-brand-primary)',
-      error: 'var(--dsw-alias-state-error-primary)',
-      ok: 'var(--dsw-alias-state-success-primary)',
+      text: 'var(--dsw-alias-label-primary, inherit)',
+      muted: 'var(--dsw-alias-label-secondary, #9aa3b2)',
+      border: 'var(--dsw-alias-border-l1, rgba(128,128,128,0.35))',
+      layer: 'var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.06))',
+      brand: 'var(--dsw-alias-brand-primary, #3b82f6)',
+      onBrand: 'var(--dsw-alias-label-on-brand, #ffffff)',
+      error: 'var(--dsw-alias-state-error-primary, #ef4444)',
+      ok: 'var(--dsw-alias-state-success-primary, #22c55e)',
     };
 
     const S = {
@@ -52,13 +53,14 @@ window.__ModuleLoader__.load({
       }),
       button: (primary, disabled) => ({
         fontSize: 12,
+        fontWeight: primary ? 600 : 500,
         padding: '5px 12px',
         borderRadius: 7,
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.45 : 1,
         border: `1px solid ${primary ? C.brand : C.border}`,
-        background: primary ? C.brand : 'transparent',
-        color: primary ? '#fff' : C.text,
+        background: 'transparent',
+        color: primary ? C.brand : C.text,
       }),
       error: { margin: 0, color: C.error, fontSize: 12 },
     };

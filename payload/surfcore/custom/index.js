@@ -82,7 +82,7 @@ export function customWakeExtra({ stateDir, key, st, selfId, ownerQq, conversati
     }
 
     // 跨窗口：她刚在别的会话里说过/看到过什么（只给摘要，不给原话；别人的私聊不互相串）
-    const cross = crossWindowRows({ key, conversations, windowMs: rhythm?.crossWindowMs, ownerQq, memoryCardText });
+    const cross = crossWindowRows({ key, conversations, windowMs: rhythm?.crossWindowMs, ownerQq, memoryCardText, ownerSeesOtherPrivate: rhythm?.crossContext?.ownerSeesOtherPrivate === true });
     if (cross.length) lines.push(`【你刚在别处】\n${cross.join('\n')}\n`);
 
     // 自己找人：这次唤醒就是她想找对方（一天最多两次，见 outreach.js）
@@ -366,7 +366,7 @@ const L2_DEFAULT_MS = 3 * 60 * 60 * 1000;
  *  2. 主人私聊的内容**只给主人**，不进群、不进别人的私聊；
  *  3. 群消息可以进任何窗口（本来就是公共信息）。
  */
-export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, ownerQq, memoryCardText = '' } = {}) {
+export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, ownerQq, memoryCardText = '', ownerSeesOtherPrivate = false } = {}) {
   const rows = [];
   try {
     if (!conversations?.get) return rows;
@@ -387,8 +387,13 @@ export function crossWindowRows({ key, conversations, windowMs, maxRows = 3, own
     for (const [otherKey, other] of conversations) {
       if (!other || otherKey === self) continue;
       const isPrivate = String(otherKey).startsWith('private:');
-      // 隐私线：群窗口不串任何私聊；别人的私聊只回给主人；主人私聊不外流
-      if (isPrivate && !(selfIsPrivate && selfIsOwner)) continue;
+      // 隐私线（默认最严）：别人的私聊内容只出现在那个人自己的窗口里 —— 不进群、
+      // 不进别人的私聊，也**不进主人窗口**（主人要总览得自己去看「和 ZepaRr」那个会话）。
+      // 想放宽就把 socialV2.crossContext.ownerSeesOtherPrivate 设成 true。
+      if (isPrivate) {
+        if (!(selfIsPrivate && selfIsOwner && ownerSeesOtherPrivate === true)) continue;
+        if (Boolean(ownerQq) && otherKey === `private:${String(ownerQq)}`) continue;
+      }
 
       const recent = Array.isArray(other.recentMessages) ? other.recentMessages : [];
       const picks = [...recent]

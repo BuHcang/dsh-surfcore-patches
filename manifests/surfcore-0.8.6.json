@@ -87,10 +87,10 @@
       "id": "custom/timer-reasons",
       "file": "src/bridge.js",
       "kind": "replaceRange",
-      "start": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
-      "end": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
-      "replacement": "const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
-      "marker": "'history', 'backlog', 'groupListen']",
+      "start": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
+      "end": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog']);",
+      "replacement": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen', 'outreach']); // [LOCAL-HOOK custom/timer-reasons]",
+      "marker": "[LOCAL-HOOK custom/timer-reasons]",
       "desc": "把 groupListen 登记进定时唤醒原因（否则被「没有未读就不许空唤醒」挡掉）"
     },
     {
@@ -257,16 +257,6 @@
       "desc": "proactive 定时器里判断「现在该不该自己去找人」，到点就唤醒那个人私聊"
     },
     {
-      "id": "custom/outreach-timer",
-      "file": "src/bridge.js",
-      "kind": "replaceRange",
-      "start": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
-      "end": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen']);",
-      "replacement": "  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin', 'history', 'backlog', 'groupListen', 'outreach']); // [LOCAL-HOOK custom/outreach-timer]",
-      "marker": "[LOCAL-HOOK custom/outreach-timer]",
-      "desc": "outreach 也算定时唤醒来源（短醒/睡眠判定用）"
-    },
-    {
       "id": "custom/not-friend",
       "file": "src/bridge.js",
       "kind": "insertAfter",
@@ -274,6 +264,25 @@
       "insert": "\n    // [LOCAL-HOOK custom/not-friend] 私聊发不出去通常就是不是好友：记下来，以后不再主动找他、也不去群里喊\n    try {\n      const em = String(error?.message ?? error ?? '');\n      if (String(key).startsWith('private:') && /好友|friend|not\\s*friend|1004/i.test(em)) {\n        customMarkNotFriend({ stateDir: STATE_DIR, qq: String(key).slice('private:'.length) });\n        log(`[找人] ${key} 私聊发不出去 记成不是好友`);\n      }\n    } catch {}",
       "marker": "[LOCAL-HOOK custom/not-friend]",
       "desc": "私聊发送失败疑似「不是好友」时记进 outreach.json，避免反复试"
+    },
+    {
+      "id": "memory/link-scope",
+      "file": "src/memory-card.js",
+      "kind": "replaceRange",
+      "start": "  // 外部链接只留文字，不把 URL 写进记忆（B站记忆只需要 BV 号）",
+      "end": "  s = s.replace(/https?:\\/\\/[^\\s，。；）)]+/gi, '（链接已省略）');",
+      "replacement": "  // 外部链接只留文字，不把 URL 写进记忆（B站记忆只需要 BV 号）\n  // QQ 侧保留链接：她要把视频转给主人的时候必须说得出地址。\n  // [LOCAL-HOOK memory/link-scope]\n  if (scope !== 'qq') s = s.replace(/https?:\\/\\/[^\\s，。；）)]+/gi, '（链接已省略）');",
+      "marker": "[LOCAL-HOOK memory/link-scope]",
+      "desc": "QQ 记忆保留链接（默认会被抹成「链接已省略」，导致她说不出视频地址）"
+    },
+    {
+      "id": "privacy/private-other",
+      "file": "src/memory-card.js",
+      "kind": "insertAfter",
+      "anchor": "    if (record.sensitive) return platform === 'all';",
+      "insert": "\n    // 隐私：别人的私聊不进 QQ 提示词（否则会出现在群聊和别人的私聊里）。\n    // 主人自己的私聊（qq-owner）和群聊不受影响；完整卡里仍然查得到。\n    // [LOCAL-HOOK privacy/private-other]\n    if (platform === 'qq' && record.private === true && record.source !== 'qq-owner') return false;",
+      "marker": "[LOCAL-HOOK privacy/private-other]",
+      "desc": "别人私聊的记忆不进 QQ 提示词（只留在完整卡里）"
     }
   ]
 }
